@@ -1,4 +1,6 @@
 ﻿import Link from "next/link";
+import { unstable_cache as cache } from "next/cache";
+import { supabaseAnon } from "@/lib/supabase";
 
 type Course = {
   id: string;
@@ -11,17 +13,17 @@ type Course = {
   updated_at: string;
 };
 
-interface NextFetchInit extends RequestInit {
-  next?: { revalidate?: number; tags?: string[] };
-}
+const getCourses = cache(async (): Promise<Course[]> => {
+  const db = supabaseAnon();
+  const { data, error } = await db
+    .from("courses")
+    .select("id,slug,title,description,video_url,published,created_at,updated_at")
+    .eq("published", true)
+    .order("created_at", { ascending: false });
 
-async function getCourses(): Promise<Course[]> {
-  const init: NextFetchInit = { next: { tags: ["courses"] } };
-  const res = await fetch("/api/courses", init);
-  if (!res.ok) throw new Error("Failed to fetch courses");
-  const json: { courses?: Course[] } = await res.json();
-  return json.courses ?? [];
-}
+  if (error) throw new Error(error.message);
+  return (data ?? []) as Course[];
+}, ["courses:list"], { tags: ["courses"] });
 
 export default async function Page() {
   const courses = await getCourses();
