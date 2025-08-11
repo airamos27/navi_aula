@@ -2,6 +2,14 @@
 import { supabaseService } from "@/lib/supabase";
 import { revalidateTag } from "next/cache";
 import { verifyToken } from "@/lib/auth";
+import { z } from "zod";
+
+const CourseSchema = z.object({
+  title: z.string().min(1),
+  slug: z.string().regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/).optional(),
+  description: z.string().max(2000).optional(),
+  videoUrl: z.string().url().optional(),
+});
 
 function slugify(s: string): string {
   return s
@@ -11,32 +19,37 @@ function slugify(s: string): string {
     .replace(/(^-|-$)/g, "");
 }
 
-export async function POST(req: Request) {
-  // validar sesión admin
-  const cookie = (req.headers.get("cookie") ?? "")
-    .split(";")
-    .map(v => v.trim().split("="))
-    .find(([k]) => k === "session");
-  const token = cookie?.[1] ?? "";
+function readSessionCookie(req: Request): string {
+  const cookieHeader = req.headers.get("cookie") ?? "";
+  for (const part of cookieHeader.split(";")) {
+    const [k, ...rest] = part.trim().split("=");
+    if (k === "session") return rest.join("=");
+  }
+  return "";
+}
 
+export async function POST(req: Request) {
+  // Validar rol admin
+  const token = readSessionCookie(req);
   const payload = token ? await verifyToken(token) : null;
   if (!payload || payload.role !== "admin") {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  const body = await req.json().catch(() => ({} as {title?:string;description?:string;videoUrl?:string;slug?:string}));
-  const title = (body.title ?? "").trim();
-  if (!title) return NextResponse.json({ error: "Missing title" }, { status: 400 });
+  // Validar body
+  const json = await req.json().catch(() => ({}));
+  const parsed = CourseSchema.safeParse(json);
+  if (!parsed.success) return NextResponse.json({ error: "Datos inválidos" }, { status: 400 });
 
-  const slug = body.slug ? slugify(body.slug) : slugify(title);
-  const description = body.description?.trim() ?? null;
-  const video_url = body.videoUrl?.trim() ?? null;
+  const title = parsed.data.title;
+  const slug = parsed.data.slug ? parsed.data.slug : slugify(title);
+  const description = parsed.data.description ?? null;
+  const video_url = parsed.data.videoUrl ?? null;
 
   const db = supabaseService();
   const { error } = await db.from("courses").insert([{ slug, title, description, video_url, published: true }]);
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
 
-  // invalida caché de /courses
   revalidateTag("courses");
   return NextResponse.json({ ok: true, slug });
 }
